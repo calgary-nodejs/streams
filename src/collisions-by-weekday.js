@@ -3,12 +3,13 @@ const split = require('split2')
 const ora = require('ora')
 const histogram = require('ascii-histogram')
 const through2 = require('through2')
+const reduce = require('through2-reduce')
 const throttle = require('lodash.throttle')
 const hydrate = require('./hydrate')
 
 const spinner = ora('In progress...').start()
 
-const source = fs.createReadStream('../data/data.csv')
+const source = fs.createReadStream('./data/data.csv')
 
 const lineToObject = () => through2.obj(
   (line, enc, cb) => {
@@ -21,23 +22,26 @@ const lineToObject = () => through2.obj(
 const weekdays = [ 0, 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun' ]
 
 const renderText = (data) => `Collisions by weekday:\n` + histogram(data, {
-  bar: '=', width: 20 })
+  bar: '=', width: 30 })
 
 const showProgress = throttle(renderText, 500)
 
-const collisionsByWeekday = () => through2.obj(
-  function (collision, enc, cb) {
+const collisionsByWeekday = () => reduce.obj(
+  (collisionsByWeekday, collision) => {
     const wd = collision.collisionDay
     const wdName = weekdays[wd]
-    if (!wdName) { return cb() }
-    if (!this.byDay) { this.byDay = {} }
-    const collisionsOnAWeekday = this.byDay[wdName] || 0
-    this.byDay[wdName] = collisionsOnAWeekday + 1
-    spinner.text = showProgress(this.byDay)
-    return cb()
-  }, function (cb) {
-    this.push(this.byDay)
-    return cb()
+    if (!wdName) { return collisionsByWeekday }
+    const collisionsOnAWeekday = collisionsByWeekday[wdName] || 0
+    const result = { ...collisionsByWeekday, [wdName]: collisionsOnAWeekday + 1 }
+    spinner.text = showProgress(result)
+    return result
+  }, {}
+)
+
+const showSummary = () => through2.obj(
+  (collisionsByWeekday, enc, cb) => {
+    spinner.succeed(renderText(collisionsByWeekday))
+    cb()
   }
 )
 
@@ -45,4 +49,5 @@ source
   .pipe(split())
   .pipe(lineToObject())
   .pipe(collisionsByWeekday())
+  .pipe(showSummary())
   .pipe(process.stdout)
